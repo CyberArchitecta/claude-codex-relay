@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { now, textValue } from './store.mjs';
+import { retryBusy } from './database.mjs';
 
 function channelValue(value = 'general') {
   if (typeof value !== 'string' || !/^[A-Za-z0-9._:-]{1,100}$/.test(value)) throw new Error('Invalid channel. Use 1-100 letters, numbers, dots, underscores, colons, or hyphens.');
@@ -18,13 +19,13 @@ export class Bridge {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.path = path.join(directory, 'messages.sqlite3');
     this.db = new DatabaseSync(this.path);
-    this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+    retryBusy(() => this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT, channel TEXT NOT NULL,
         sender TEXT NOT NULL CHECK(sender IN ('codex','claude')),
         recipient TEXT NOT NULL CHECK(recipient IN ('codex','claude')),
         body TEXT NOT NULL, reply_to INTEGER REFERENCES messages(id), created_at TEXT NOT NULL, read_at TEXT);
-      CREATE INDEX IF NOT EXISTS idx_messages_inbox ON messages(recipient,read_at,channel,id);`);
+      CREATE INDEX IF NOT EXISTS idx_messages_inbox ON messages(recipient,read_at,channel,id);`));
   }
   send({ message, channel = 'general', reply_to = null }) {
     const body = textValue(message, 'Message'); channel = channelValue(channel);

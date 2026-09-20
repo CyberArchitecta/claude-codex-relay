@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { retryBusy } from './database.mjs';
 
 export const now = () => new Date().toISOString();
 export const activeStates = new Set(['queued', 'running']);
@@ -16,7 +17,7 @@ export class Store {
   constructor(directory) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path.join(directory, 'relay.sqlite3'));
-    this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+    retryBusy(() => this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY, title TEXT NOT NULL, project TEXT NOT NULL,
         original_prompt TEXT NOT NULL, context TEXT NOT NULL DEFAULT '',
@@ -30,10 +31,16 @@ export class Store {
         id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id),
         kind TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS events_run ON events(run_id,id);
-      CREATE INDEX IF NOT EXISTS runs_task ON runs(task_id,created_at);`);
-    if (!this.db.prepare('PRAGMA table_info(runs)').all().some(column => column.name === 'instruction')) {
-      this.db.exec("ALTER TABLE runs ADD COLUMN instruction TEXT NOT NULL DEFAULT ''");
-    }
+      CREATE INDEX IF NOT EXISTS runs_task ON runs(task_id,created_at);`));
+    retryBusy(() => {
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        if (!this.db.prepare('PRAGMA table_info(runs)').all().some(column => column.name === 'instruction')) {
+          this.db.exec("ALTER TABLE runs ADD COLUMN instruction TEXT NOT NULL DEFAULT ''");
+        }
+        this.db.exec('COMMIT');
+      } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    });
   }
   createTask({ title, project, prompt, context = '' }) {
     const task = { id: randomUUID(), title: textValue(title, 'Title', 160), project,

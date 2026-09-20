@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Bridge } from '../src/bridge.mjs';
 
 test('MCP stdio initializes and exchanges a real round-trip across two processes', async t => {
   const root = mkdtempSync(path.join(tmpdir(), 'relay-mcp-')); const children = [];
@@ -30,4 +31,21 @@ test('MCP stdio initializes and exchanges a real round-trip across two processes
   assert.equal((await claude('tools/call', { name: 'bridge_inbox', arguments: {} })).result.structuredContent.messages[0].body, 'Reviewed.');
   assert.equal((await claude('unknown', {})).error.code, -32601);
   assert.equal((await codex('tools/call', { name: 'bridge_send', arguments: { message: 'oops', channel: '../bad' } })).result.isError, true);
+});
+
+test('eight processes can initialize a fresh SQLite bridge concurrently', async t => {
+  const root = mkdtempSync(path.join(tmpdir(), 'relay-db-race-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const children = Array.from({ length: 8 }, () => spawn(process.execPath,
+    [fileURLToPath(new URL('./fixtures/database.mjs', import.meta.url)), root],
+    { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true }));
+  const outcomes = await Promise.allSettled(children.map(child => new Promise((resolve, reject) => {
+    let stderr = ''; child.stderr.on('data', data => { stderr += data; });
+    child.once('error', reject);
+    child.once('close', code => code === 0 ? resolve() : reject(new Error(stderr)));
+  })));
+  for (const outcome of outcomes) assert.equal(outcome.status, 'fulfilled', outcome.reason?.message);
+  const reader = new Bridge(path.join(root, 'bridge'), 'codex');
+  try { assert.equal(reader.inbox({ channel: 'concurrent' }).messages.length, 8); }
+  finally { reader.close(); }
 });

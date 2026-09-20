@@ -4,12 +4,13 @@ Release candidate 0.1.0 · 2026-09-20
 
 ## Automated checks
 
-- Node.js 24.13.0 on Windows: **18 tests passed**.
+- Node.js 24.13.0 on Windows: **19 tests passed**.
 - JavaScript syntax checks: passed.
 - Real fixture subprocesses verified both adapter streams, UTF-8 chunk boundaries, session IDs, same-provider resume, cross-provider handoff, preserved follow-up instructions, and process cancellation.
 - Scheduler checks covered simultaneous tasks in separate projects, serialization within a project, and rejection of duplicate concurrent submissions.
 - Failure fixtures covered permission denial, usage limits, missing completion, and an incompatible CLI/model.
 - Two separate MCP processes exchanged a message and reply with correct identity, channel, and unread behavior.
+- Eight simultaneous processes opened fresh databases and wrote messages. Initialization retries SQLite WAL lock contention; the startup migration uses a transaction.
 - HTTP checks covered authentication, foreign Origin and Host rejection, static-file confinement, request validation, and preview without execution.
 - A second server was refused access to an already-owned data directory.
 - The GitHub Actions matrix runs these checks on Windows, macOS, and Linux. The public [Checks workflow](https://github.com/CyberArchitecta/claude-codex-relay/actions/workflows/ci.yml) is the source of truth for hosted results.
