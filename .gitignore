@@ -1,0 +1,11 @@
+node_modules/
+*.sqlite3*
+*.db*
+.env*
+!.env.example
+*.log
+*.tgz
+dist/
+coverage/
+.test-data/
+scratch/
