@@ -8,6 +8,15 @@
 
 Relay is an open-source local CLI with a browser interface. It uses your installed agent CLIs and their existing authentication. It does not provide model access or bundle a paid API proxy. MIT licensed, with no external runtime dependencies.
 
+
+## Chat and usage
+
+Click **New chat**, leave the project folder empty for a general conversation, and save it or include a first message. Choose Claude or Codex beside the message box. **Enter** sends; **Shift+Enter** adds a line. Switching providers forwards recent conversation history and shared context; returning to a provider resumes its saved session. You can attach a project when creating the chat, or choose **Project task** for the original coding workflow.
+
+**Usage** shows recorded input/output/cache tokens for each provider. Each measured reply and conversation also shows token usage. Codex session counters are not counted twice on resume. Old or interrupted replies without usage are marked unreported. Claude's dollar amounts are CLI estimates, not subscription charges; Codex dollar cost is not guessed.
+
+**Check Codex limits** reads your account's reported plan windows and reset times without calling a model. Claude's plan percentages are available through the linked usage page. Token volume, subscription percentages, and context-window fill are different measurements.
+
 ## Get started
 
 Install **Node.js 24.13 or newer** and at least one current provider CLI:
@@ -30,7 +39,7 @@ Open the private localhost URL printed in your terminal. Keep the terminal runni
 Alternatively, install a versioned release without cloning:
 
 ```sh
-npm install -g https://github.com/CyberArchitecta/claude-codex-relay/releases/download/v0.1.0/claude-codex-relay-0.1.0.tgz
+npm install -g https://github.com/CyberArchitecta/claude-codex-relay/releases/download/v0.2.0/claude-codex-relay-0.2.0.tgz
 agent-relay
 ```
 

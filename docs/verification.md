@@ -1,36 +1,41 @@
 # Verification record
 
-Release candidate 0.1.0 · 2026-09-20
+Release 0.2.0 · 2026-09-21
 
 ## Automated checks
 
-- Node.js 24.13.0 on Windows: **19 tests passed**.
-- JavaScript syntax checks: passed.
-- Real fixture subprocesses verified both adapter streams, UTF-8 chunk boundaries, session IDs, same-provider resume, cross-provider handoff, preserved follow-up instructions, and process cancellation.
-- Scheduler checks covered simultaneous tasks in separate projects, serialization within a project, and rejection of duplicate concurrent submissions.
-- Failure fixtures covered permission denial, usage limits, missing completion, and an incompatible CLI/model.
-- Two separate MCP processes exchanged a message and reply with correct identity, channel, and unread behavior.
-- Eight simultaneous processes opened fresh databases and wrote messages. Initialization retries SQLite WAL lock contention; the startup migration uses a transaction.
-- HTTP checks covered authentication, foreign Origin and Host rejection, static-file confinement, request validation, and preview without execution.
-- A second server was refused access to an already-owned data directory.
-- The GitHub Actions matrix runs these checks on Windows, macOS, and Linux. The public [Checks workflow](https://github.com/CyberArchitecta/claude-codex-relay/actions/workflows/ci.yml) is the source of truth for hosted results.
+- Node.js 24.13 on Windows: **24 tests passed**; JavaScript syntax checks passed.
+- Real fixture processes verify adapter streams, Unicode, sessions, resume, handoffs, cancellation, failure states, queue serialization, and duplicate submission prevention.
+- Six concurrent processes appended 60 shared notes without losing any. Stale browser saves return HTTP 409 and preserve remote changes.
+- Existing tests cover MCP round trips, eight-process SQLite initialization, localhost authentication, Origin/Host checks, preview without execution, and exclusive server ownership.
+- Chat tests cover empty projectless conversations, read-only defaults, per-provider session resume after switching, and delivery of intervening messages.
+- Usage tests cover missing data, Claude model totals and cache accounting, and cumulative Codex session totals without double-counting.
+- Chromium tests cover chat creation, message sending, provider switches, token display, draft settings, shared-note refresh, conflict resolution, a real racing save, and desktop/mobile layout. These use fixture providers, not paid models.
+- GitHub Actions runs the Node tests on Windows, macOS, and Linux, plus Chromium checks on Linux. See the [Checks workflow](https://github.com/CyberArchitecta/claude-codex-relay/actions/workflows/ci.yml) for hosted results.
 
 ## Live provider checks
 
-| Provider | Observed result |
-| --- | --- |
-| Claude Code 2.1.70 | Installed, but standalone CLI authentication was absent. A real run returned “Not logged in” and Relay showed Needs attention. Successful Claude execution/resume remains unverified live in this environment; both are covered by subprocess fixtures. |
-| Codex CLI 0.146.0 | Its configured model required a newer CLI. Relay captured the failure. No model substitution was made. |
-| Codex CLI 0.155.0-alpha.9.2, already bundled with the desktop app | A real run received the expected shared-context marker; a subsequent run resumed the saved provider session and returned the expected response. Both completed successfully. |
+Both authenticated CLIs were exercised through the actual dashboard in a disposable Git project on Windows:
 
-The newer Codex executable was selected with a process-local RELAY_CODEX_BIN override. Global CLI installations, provider logins, and client configuration were not changed.
+1. Codex diagnosed a quantity bug, ran the original tests (2 passed, 1 failed), and left all files unchanged.
+2. The same Codex session fixed only the implementation. All 3 original tests passed.
+3. Claude received the handoff, read the changed files, retained the shared marker, and identified missing input validation.
+4. The same Claude session added validation and five regression tests. Its shell commands were denied by the CLI; Relay correctly showed **Needs attention**, with the denial recorded.
+5. Codex received the return handoff and independently ran all **8 tests: passed**. A separate local test invocation confirmed the result.
+6. A queued task was cancelled before starting. A running Claude process was stopped. Another real Codex task automatically started after Claude released the same project folder.
 
-These were short read-only integration prompts in a new temporary Git repository. They validate launch, streaming, state, context delivery, and resume. They are not a benchmark or proof that arbitrary coding work succeeds.
+Provider versions: Claude Code 2.1.70 and Codex 0.155.0-alpha.9.2. The installed older Codex 0.146.0 rejected the configured model; the newer executable was selected with a process-local RELAY_CODEX_BIN override. No model was substituted.
 
-## Browser checks
+The updated live app was also checked with an empty projectless chat and a real read-only Codex account quota query. That query returned both 5-hour and weekly windows. Additional chat regression checks used fixtures to conserve subscription usage.
 
-Python Playwright with Chromium verified task creation without launch, task selection, cross-provider context preview, and absence of browser runtime errors. The interface was rendered at 1440×1100 and 390×844; neither layout overflowed horizontally. Screenshots were visually inspected. The README screenshot contains clearly labeled sample data, not real client work.
+## Usage semantics and boundaries
 
-## Boundaries
+- Codex exec reports cumulative session counters. Relay counts each session once in totals and shows a reply delta when an earlier counter is available.
+- Claude result modelUsage includes model and subagent usage; Relay uses it when present and otherwise uses the top-level usage result. Cache reads/writes are included in input tokens exactly once.
+- Missing usage remains unknown. Old runs are not retroactively priced or assigned invented token counts. Interrupted processes may never emit final usage.
+- Claude cost figures are CLI estimates, not subscription charges. Codex dollar cost is not inferred from token counts.
+- Subscription percentages and context-window fill are separate from token expenditure. Codex limits come from its supported app-server endpoint. Claude headless output does not reliably expose all plan percentages; the app links to its usage page.
+- No live macOS or Linux account was available; hosted tests use fixtures. Existing outside conversations are not imported.
+- Chat handoffs carry at most 80,000 characters of recent intervening messages plus shared context. Keep durable decisions in shared context.
 
-There was no live macOS or Linux provider login available here. Hosted OS tests use fixture providers and do not call paid models. Claude live verification requires the user to log in to the standalone CLI and rerun scripts/smoke-live.mjs. Existing external conversations are not imported.
+Sources: [Codex app server](https://learn.chatgpt.com/docs/app-server), [Codex CLI usage implementation](https://github.com/openai/codex/blob/main/codex-rs/exec/src/event_processor_with_jsonl_output.rs), [Claude usage accounting](https://code.claude.com/docs/en/agent-sdk/cost-tracking).

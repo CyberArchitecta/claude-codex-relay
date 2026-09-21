@@ -42,7 +42,7 @@ export function startMcp({ dataDir, bridgeDir, agent, input = process.stdin, out
     const task = store.task(args.task_id);
     if (name === 'relay_note') {
       const note = textValue(args.note, 'Note', 5000);
-      store.setContext(task.id, `${task.context}\n\n[${agent}] ${note}`.trim());
+      store.appendContext(task.id, `[${agent}] ${note}`);
       return { task_id: task.id, saved: true };
     }
     return { task, runs: store.runs(task.id).map(({ id, agent, state, summary }) => ({ id, agent, state, summary })) };
@@ -60,7 +60,7 @@ export function startMcp({ dataDir, bridgeDir, agent, input = process.stdin, out
       }
       if (request.id == null) return;
       let result;
-      if (request.method === 'initialize') result = { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'claude-codex-relay', version: '0.1.0' } };
+      if (request.method === 'initialize') result = { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'claude-codex-relay', version: '0.2.0' } };
       else if (request.method === 'ping') result = {};
       else if (request.method === 'tools/list') result = { tools: toolDefinitions };
       else if (request.method === 'tools/call') {

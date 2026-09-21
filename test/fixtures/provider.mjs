@@ -24,5 +24,5 @@ const message = `Verified fixture response: café 🛰️. ${prompt.includes('se
 const response = Buffer.from(`${JSON.stringify(agent === 'codex' ? { type: 'item.completed', item: { type: 'agent_message', text: message } } : { type: 'assistant', message: { content: [{ type: 'text', text: message }] } })}\n`);
 const cut = response.indexOf(Buffer.from('🛰️')) + 1;
 process.stdout.write(response.subarray(0, cut)); await new Promise(resolve => setTimeout(resolve, 10)); process.stdout.write(response.subarray(cut));
-if (agent === 'codex') emit({ type: 'turn.completed' });
-else emit({ type: 'result', result: message, is_error: false, session_id: session, permission_denials: settings.mode === 'permission' ? [{ tool_name: 'Bash' }] : [] });
+if (agent === 'codex') emit({ type: 'turn.completed', usage: { input_tokens: 100, cached_input_tokens: 80, output_tokens: 20 } });
+else emit({ type: 'result', result: message, usage: { input_tokens: 10, output_tokens: 15, cache_read_input_tokens: 20, cache_creation_input_tokens: 30 }, total_cost_usd: 0.03, is_error: false, session_id: session, permission_denials: settings.mode === 'permission' ? [{ tool_name: 'Bash' }] : [] });

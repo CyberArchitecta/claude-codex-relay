@@ -2,6 +2,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
+import { parseUsage } from './usage.mjs';
 
 const exec = promisify(execFile);
 export function findProvider(agent, env = process.env, platform = process.platform) {
@@ -26,19 +27,19 @@ export function findProvider(agent, env = process.env, platform = process.platfo
   throw new Error(`${agent} was not found. Install and sign in to its CLI, then restart Relay. RELAY_${agent.toUpperCase()}_BIN can point to a native executable or JS entry point.`);
 }
 
-export function providerArgs({ agent, permission = 'read-only', model = '', session_id = null }) {
+export function providerArgs({ agent, permission = 'read-only', model = '', session_id = null, chat = false, projectless = false }) {
   if (!['read-only', 'workspace-write'].includes(permission)) throw new Error('Invalid permission mode.');
   if (session_id && !/^[a-zA-Z0-9_-]{1,160}$/.test(session_id)) throw new Error('Invalid provider session ID.');
   if (model && !/^[a-zA-Z0-9._:/-]{1,120}$/.test(model)) throw new Error('Invalid model name.');
   if (agent === 'codex') {
     return ['exec', '-c', `sandbox_mode="${permission}"`, '-c', 'approval_policy="never"',
-      ...(session_id ? ['resume', session_id] : []), '--json',
+      ...(session_id ? ['resume', session_id] : []), '--json', ...(chat ? ['--skip-git-repo-check'] : []),
       ...(model ? ['--model', model] : []), '-'];
   }
   if (agent !== 'claude') throw new Error('Invalid agent.');
   return ['-p', '--output-format', 'stream-json', '--verbose',
     ...(permission === 'read-only'
-      ? ['--permission-mode', 'dontAsk', '--tools', 'Read,Glob,Grep', '--allowedTools', 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}']
+      ? ['--permission-mode', 'dontAsk', '--tools', projectless ? '' : 'Read,Glob,Grep', '--allowedTools', projectless ? '' : 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}']
       : ['--permission-mode', 'acceptEdits']),
     ...(session_id ? ['--resume', session_id] : []), ...(model ? ['--model', model] : [])];
 }
@@ -69,7 +70,7 @@ export function failureState(message) {
 }
 
 export function parseEvent(agent, event) {
-  const out = { events: [] };
+  const out = { events: [], usage: parseUsage(agent, event) };
   const add = (kind, text) => { if (text) out.events.push({ kind, text: String(text) }); };
   if (agent === 'codex') {
     if (event.type === 'thread.started') out.sessionId = event.thread_id;

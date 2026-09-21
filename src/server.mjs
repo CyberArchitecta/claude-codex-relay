@@ -6,6 +6,8 @@ import path from 'node:path';
 import { Store } from './store.mjs';
 import { Runner, projectPath } from './runner.mjs';
 import { doctor } from './providers.mjs';
+import { usageTotals } from './usage.mjs';
+import { readCodexLimits } from './limits.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const assets = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']]]);
@@ -45,12 +47,13 @@ async function body(req) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected a JSON object.');
   return value;
 }
-export async function startServer({ dataDir, port = 4317, concurrency = 2, runnerOptions = {}, providers: suppliedProviders } = {}) {
+export async function startServer({ dataDir, port = 4317, concurrency = 2, runnerOptions = {}, providers: suppliedProviders, readLimits = readCodexLimits } = {}) {
   const release = lock(dataDir);
   let store;
   try { store = new Store(dataDir); store.recover(); } catch (error) { release(); throw error; }
   const runner = new Runner(store, { concurrency, ...runnerOptions });
   const token = randomBytes(32).toString('hex');
+  let limitsCache, limitsPending;
   let origin, providers = suppliedProviders || await doctor();
   const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -68,17 +71,29 @@ export async function startServer({ dataDir, port = 4317, concurrency = 2, runne
       const actual = Buffer.from(req.headers.authorization || ''); const expected = Buffer.from(`Bearer ${token}`);
       if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return json(res, 401, { error: 'Open the private URL printed by agent-relay to connect.' });
       if (req.method === 'GET' && url.pathname === '/api/status') return json(res, 200, { providers, concurrency, dataDir });
+      if (req.method === 'POST' && url.pathname === '/api/limits') {
+        await body(req);
+        if (!limitsCache || Date.now() - limitsCache.time > 60_000) {
+          limitsPending ||= readLimits().then(data => { limitsCache = { time: Date.now(), data }; }).finally(() => { limitsPending = null; });
+          await limitsPending;
+        }
+        return json(res, 200, limitsCache.data);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/usage') return json(res, 200, { providers: usageTotals(store.runs()) });
       if (req.method === 'GET' && url.pathname === '/api/tasks') return json(res, 200, { tasks: store.tasks() });
       if (req.method === 'POST' && url.pathname === '/api/doctor') { await body(req); providers = await doctor(); return json(res, 200, { providers }); }
       if (req.method === 'POST' && url.pathname === '/api/tasks') {
-        const input = await body(req); const task = store.createTask({ ...input, project: projectPath(input.project) });
+        const input = await body(req); const task = store.createTask({ ...input, project: input.kind === 'chat' && !input.project ? '' : projectPath(input.project) });
         return json(res, 201, { task });
       }
       const match = url.pathname.match(/^\/api\/tasks\/([a-f0-9-]+)(?:\/(context|preview|runs))?$/);
       if (match) {
         const [, id, action] = match;
-        if (req.method === 'GET' && !action) return json(res, 200, { task: store.task(id), runs: store.runs(id).map(run => ({ ...run, events: store.recentEvents(run.id, 100) })) });
-        if (req.method === 'POST' && action === 'context') return json(res, 200, { task: store.setContext(id, (await body(req)).context) });
+        if (req.method === 'GET' && !action) return json(res, 200, { task: store.task(id), usage: usageTotals(store.runs(id)), runs: store.runs(id).map(run => ({ ...run, events: store.recentEvents(run.id, 100) })) });
+        if (req.method === 'POST' && action === 'context') {
+          const input = await body(req);
+          return json(res, 200, { task: store.setContext(id, input.context, input.expected_context) });
+        }
         if (req.method === 'POST' && action === 'preview') {
           const { task, ...preview } = await runner.prepare(id, await body(req)); return json(res, 200, preview);
         }
@@ -95,7 +110,7 @@ export async function startServer({ dataDir, port = 4317, concurrency = 2, runne
         }
       }
       return json(res, 404, { error: 'Not found.' });
-    } catch (error) { if (!res.headersSent) json(res, 400, { error: error.message }); else res.end(); }
+    } catch (error) { if (!res.headersSent) json(res, error.status === 409 ? 409 : 400, { error: error.message }); else res.end(); }
   });
   server.requestTimeout = 15_000; server.headersTimeout = 10_000;
   try { await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); }); }

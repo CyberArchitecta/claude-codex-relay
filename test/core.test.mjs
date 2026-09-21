@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store } from '../src/store.mjs';
@@ -107,3 +108,42 @@ for (const [agent, mode, expected] of [['claude', 'permission', 'needs_attention
     const run = await runner.enqueue(create().id, { agent }); await until(() => !runner.active.size); assert.equal(store.run(run.id).state, expected);
   });
 }
+
+test('concurrent note appends preserve every worker contribution', async t => {
+  const { root, store, create } = setup(t);
+  const task = create({ context: 'Keep the original context.' });
+  const children = Array.from({ length: 6 }, (_, worker) => spawn(process.execPath,
+    [fileURLToPath(new URL('./fixtures/context.mjs', import.meta.url)), root, task.id, String(worker)],
+    { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true }));
+  t.after(() => { for (const child of children) if (child.exitCode === null) child.kill(); });
+  const done = Promise.allSettled(children.map(child => new Promise((resolve, reject) => {
+    let stderr = ''; child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('close', code => code === 0 ? resolve() : reject(new Error(stderr)));
+  })));
+  await until(() => children.every((_, i) => existsSync(path.join(root, `ready-${i}`))));
+  writeFileSync(path.join(root, 'go'), '');
+  for (const result of await done) assert.equal(result.status, 'fulfilled', result.reason?.message);
+  const notes = store.task(task.id).context.split('\n\n');
+  assert.equal(notes[0], 'Keep the original context.'); assert.equal(notes.length, 61);
+  assert.equal(new Set(notes).size, 61);
+  for (let worker = 0; worker < 6; worker++) for (let i = 0; i < 10; i++) assert(notes.includes(`worker-${worker}-note-${i}`));
+});
+
+test('projectless chat resumes each provider and forwards intervening messages', async t => {
+  const { store, runner, create } = setup(t);
+  const task = create({ kind: 'chat', project: '', prompt: '', title: 'General chat', context: 'Remember ORBIT.' });
+  const a = await runner.enqueue(task.id, { agent: 'codex', note: 'My color is blue.', permission: 'workspace-write' });
+  await until(() => !runner.active.size); assert.equal(store.run(a.id).permission, 'read-only');
+  const b = await runner.enqueue(task.id, { agent: 'claude', note: 'Discuss the color.' });
+  await until(() => !runner.active.size);
+  const preview = await runner.prepare(task.id, { agent: 'codex', note: 'What did Claude say?' });
+  assert.equal(preview.session_id, store.run(a.id).session_id);
+  assert(preview.prompt.includes('Discuss the color.')); assert(preview.prompt.includes('ORBIT'));
+  assert(!preview.prompt.includes('Report what you changed'));
+  const received = readFileSync(path.join(store.chatDirectory(task.id), 'received.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert(received[0].args.includes('--skip-git-repo-check'));
+  assert(received[1].prompt.includes('My color is blue.'));
+  assert(received[1].args.includes('--tools')); assert(received[1].args.includes(''));
+  assert(store.run(a.id).usage); assert(store.run(b.id).usage);
+});

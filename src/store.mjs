@@ -15,6 +15,7 @@ export function textValue(value, name, max = 20_000, required = true) {
 
 export class Store {
   constructor(directory) {
+    this.directory = path.resolve(directory);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path.join(directory, 'relay.sqlite3'));
     retryBusy(() => this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
@@ -38,15 +39,18 @@ export class Store {
         if (!this.db.prepare('PRAGMA table_info(runs)').all().some(column => column.name === 'instruction')) {
           this.db.exec("ALTER TABLE runs ADD COLUMN instruction TEXT NOT NULL DEFAULT ''");
         }
+        if (!this.db.prepare('PRAGMA table_info(tasks)').all().some(c => c.name === 'kind')) this.db.exec("ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'");
+        if (!this.db.prepare('PRAGMA table_info(runs)').all().some(c => c.name === 'usage_json')) this.db.exec("ALTER TABLE runs ADD COLUMN usage_json TEXT");
         this.db.exec('COMMIT');
       } catch (error) { this.db.exec('ROLLBACK'); throw error; }
     });
   }
-  createTask({ title, project, prompt, context = '' }) {
+  createTask({ title, project = '', prompt = '', context = '', kind = 'task' }) {
+    if (!['task', 'chat'].includes(kind)) throw new Error('Invalid task kind.');
     const task = { id: randomUUID(), title: textValue(title, 'Title', 160), project,
-      original_prompt: textValue(prompt, 'Request'), context: textValue(context, 'Context', 20_000, false),
-      created_at: now(), updated_at: now() };
-    this.db.prepare('INSERT INTO tasks VALUES (?,?,?,?,?,?,?)').run(...Object.values(task));
+      original_prompt: textValue(prompt, 'Request', 20_000, kind !== 'chat'), context: textValue(context, 'Context', 20_000, false),
+      created_at: now(), updated_at: now(), kind };
+    this.db.prepare('INSERT INTO tasks (id,title,project,original_prompt,context,created_at,updated_at,kind) VALUES (?,?,?,?,?,?,?,?)').run(...Object.values(task));
     return task;
   }
   task(id) {
@@ -59,20 +63,44 @@ export class Store {
       (SELECT agent FROM runs WHERE task_id=t.id ORDER BY rowid DESC LIMIT 1) AS agent
       FROM tasks t ORDER BY updated_at DESC`).all();
   }
-  setContext(id, context) {
+  setContext(id, context, expectedContext) {
     this.task(id);
-    this.db.prepare('UPDATE tasks SET context=?,updated_at=? WHERE id=?')
-      .run(textValue(context, 'Context', 20_000, false), now(), id);
+    const value = textValue(context, 'Context', 20_000, false);
+    if (expectedContext !== undefined) textValue(expectedContext, 'Previous context', 20_000, false);
+    const result = expectedContext === undefined
+      ? this.db.prepare('UPDATE tasks SET context=?,updated_at=? WHERE id=?').run(value, now(), id)
+      : this.db.prepare('UPDATE tasks SET context=?,updated_at=? WHERE id=? AND context=?').run(value, now(), id, expectedContext);
+    if (!result.changes) {
+      const error = new Error('Shared context changed elsewhere. Review the latest context before saving.');
+      error.status = 409; throw error;
+    }
     return this.task(id);
   }
+  appendContext(id, note) {
+    return retryBusy(() => {
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        const task = this.task(id);
+        const updated = this.setContext(id, `${task.context}\n\n${textValue(note, 'Note', 6000)}`.trim(), task.context);
+        this.db.exec('COMMIT'); return updated;
+      } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    });
+  }
+  chatDirectory(id) {
+    const task = this.task(id);
+    if (task.project) return task.project;
+    const directory = path.join(this.directory, 'chat-workspaces', task.id);
+    mkdirSync(directory, { recursive: true, mode: 0o700 }); return directory;
+  }
   runs(taskId) {
-    return taskId ? this.db.prepare('SELECT * FROM runs WHERE task_id=? ORDER BY rowid').all(taskId)
+    const rows = taskId ? this.db.prepare('SELECT * FROM runs WHERE task_id=? ORDER BY rowid').all(taskId)
       : this.db.prepare('SELECT * FROM runs ORDER BY rowid').all();
+    return rows.map(row => ({ ...row, usage: row.usage_json ? JSON.parse(row.usage_json) : null }));
   }
   run(id) {
     const run = this.db.prepare('SELECT * FROM runs WHERE id=?').get(id);
     if (!run) throw new Error('Run not found.');
-    return run;
+    return { ...run, usage: run.usage_json ? JSON.parse(run.usage_json) : null };
   }
   createRun({ task_id, agent, prompt, permission, model = '', session_id = null, instruction = '' }) {
     this.task(task_id);
@@ -83,7 +111,7 @@ export class Store {
     return run;
   }
   patchRun(id, patch) {
-    const allowed = new Set(['state', 'session_id', 'summary', 'started_at', 'ended_at', 'exit_code']);
+    const allowed = new Set(['state', 'session_id', 'summary', 'started_at', 'ended_at', 'exit_code', 'usage_json']);
     for (const key of Object.keys(patch)) if (!allowed.has(key)) throw new Error('Invalid run field.');
     const run = this.run(id);
     this.db.prepare(`UPDATE runs SET ${Object.keys(patch).map(k => `${k}=?`).join(',')} WHERE id=?`)

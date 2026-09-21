@@ -43,3 +43,20 @@ test('a second server cannot recover or steal the first server’s run state', a
   const { root } = await setup(t);
   await assert.rejects(() => startServer({ dataDir: path.join(root, 'data'), port: 0, providers: [] }), /already running/);
 });
+
+test('stale context saves return 409 and preserve remote changes', async t => {
+  const { project, request, app } = await setup(t);
+  const { task } = await (await request('/api/tasks', { title: 'Shared context', project, prompt: 'Coordinate.', context: 'Original' })).json();
+  const route = `/api/tasks/${task.id}/context`;
+  assert.equal((await request(route, { context: 'Remote note', expected_context: 'Original' })).status, 200);
+  const stale = await request(route, { context: 'Stale draft', expected_context: 'Original' });
+  assert.equal(stale.status, 409); assert.match((await stale.json()).error, /changed elsewhere/);
+  assert.equal(app.store.task(task.id).context, 'Remote note');
+  app.store.appendContext(task.id, '[claude] Preserve this too.');
+  assert.equal((await request(route, { context: 'Merged too early', expected_context: 'Remote note' })).status, 409);
+  const latest = app.store.task(task.id).context;
+  const merged = await request(route, { context: latest + '\nUser draft', expected_context: latest });
+  assert.equal(merged.status, 200); assert.equal((await merged.json()).task.context, latest + '\nUser draft');
+  assert.equal((await request(route, { context: 'Invalid', expected_context: null })).status, 400);
+  assert.equal(app.store.task(task.id).context, latest + '\nUser draft');
+});

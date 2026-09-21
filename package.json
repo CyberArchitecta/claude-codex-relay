@@ -1,6 +1,6 @@
 {
   "name": "claude-codex-relay",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A local workspace for Claude Code and Codex: run, resume, hand off, and keep track.",
   "type": "module",
   "bin": { "agent-relay": "bin/relay.mjs" },
