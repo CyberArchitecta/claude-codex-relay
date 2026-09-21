@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { startServer } from '../../src/server.mjs';
 import { now } from '../../src/store.mjs';
 
+process.env.RELAY_FIXTURE_UNIQUE_SESSIONS = '1';
 const root = mkdtempSync(path.join(tmpdir(), 'relay-ui-'));
 const app = await startServer({
   dataDir: path.join(root, 'data'), port: 0, providers: [],

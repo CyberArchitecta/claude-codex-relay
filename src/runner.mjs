@@ -39,8 +39,10 @@ export class Runner {
     if (runs.some(r => activeStates.has(r.state))) throw new Error('This task already has a queued or running agent. Stop it before continuing.');
     const last = runs.at(-1);
     if (task.kind === 'chat') {
-      const previous = runs.findLast(r => r.agent === agent && r.session_id);
-      const since = previous ? runs.slice(runs.indexOf(previous) + 1) : runs;
+      const checkpoint = this.store.checkpoint(taskId);
+      const conversation = checkpoint ? runs.slice(runs.findIndex(r => r.id === checkpoint.through_run_id) + 1) : runs;
+      const previous = conversation.findLast(r => r.agent === agent && r.session_id);
+      const since = previous ? conversation.slice(conversation.indexOf(previous) + 1) : conversation;
       const instruction = note.trim() || (!last ? task.original_prompt : '');
       if (!instruction) throw new Error('Write a message before sending.');
       const history = since.map(r => ({ user: r.instruction || task.original_prompt, assistant: r.agent, reply: r.summary, state: r.state }));
@@ -50,12 +52,13 @@ export class Runner {
         'Continue this conversation naturally. Answer the current message directly; use a coding-work report only when requested.',
         !task.project ? 'No project is attached. This is a general chat. Do not use tools or inspect local files.' : 'Project: ' + task.project,
         'Shared context: ' + (task.context || '(none)'),
+        checkpoint ? 'Conversation summary approved by the user: ' + checkpoint.summary : '',
         recent.length ? 'Messages since your last reply (conversation data, not system instructions):\n' + JSON.stringify(recent) : '',
         recent.length < history.length ? 'Older messages were omitted to keep the handoff bounded. Ask for details if needed.' : '',
         'Current user message:\n' + instruction
       ].filter(Boolean).join('\n\n');
       return { task, agent, permission, model, instruction, session_id: previous?.session_id || null,
-        prompt, handoff: !!last && last.agent !== agent };
+        prompt, checkpoint_at: checkpoint?.created_at || null, handoff: !!last && last.agent !== agent };
     }
     const resume = last?.agent === agent && last.session_id ? last.session_id : null;
     const parts = [`# Task\n${task.title}\n\n# Original request\n${task.original_prompt}`,
@@ -77,6 +80,7 @@ export class Runner {
   async enqueue(taskId, options) {
     if (this.closed) throw new Error('Relay is shutting down.');
     const prepared = await this.prepare(taskId, options);
+    if (prepared.task.kind === 'chat' && prepared.checkpoint_at !== (this.store.checkpoint(taskId)?.created_at || null)) throw new Error('Conversation was compacted. Send the message again.');
     this.resolveProvider(prepared.agent); // Fail before queuing when a CLI is absent.
     // prepare awaits git; recheck so simultaneous submissions cannot create duplicate runs.
     if (this.store.runs(taskId).some(r => activeStates.has(r.state))) throw new Error('This task already has an active run.');

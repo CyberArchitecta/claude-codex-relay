@@ -86,14 +86,15 @@ export async function startServer({ dataDir, port = 4317, concurrency = 2, runne
         const input = await body(req); const task = store.createTask({ ...input, project: input.kind === 'chat' && !input.project ? '' : projectPath(input.project) });
         return json(res, 201, { task });
       }
-      const match = url.pathname.match(/^\/api\/tasks\/([a-f0-9-]+)(?:\/(context|preview|runs))?$/);
+      const match = url.pathname.match(/^\/api\/tasks\/([a-f0-9-]+)(?:\/(context|preview|runs|compact))?$/);
       if (match) {
         const [, id, action] = match;
-        if (req.method === 'GET' && !action) return json(res, 200, { task: store.task(id), usage: usageTotals(store.runs(id)), runs: store.runs(id).map(run => ({ ...run, events: store.recentEvents(run.id, 100) })) });
+        if (req.method === 'GET' && !action) return json(res, 200, { task: store.task(id), checkpoint: store.checkpoint(id), usage: usageTotals(store.runs(id)), runs: store.runs(id).map(run => ({ ...run, events: store.recentEvents(run.id, 100) })) });
         if (req.method === 'POST' && action === 'context') {
           const input = await body(req);
           return json(res, 200, { task: store.setContext(id, input.context, input.expected_context) });
         }
+        if (req.method === 'POST' && action === 'compact') return json(res, 200, { checkpoint: store.compactChat(id, await body(req)) });
         if (req.method === 'POST' && action === 'preview') {
           const { task, ...preview } = await runner.prepare(id, await body(req)); return json(res, 200, preview);
         }

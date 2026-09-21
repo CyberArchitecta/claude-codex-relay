@@ -60,7 +60,7 @@ export function startMcp({ dataDir, bridgeDir, agent, input = process.stdin, out
       }
       if (request.id == null) return;
       let result;
-      if (request.method === 'initialize') result = { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'claude-codex-relay', version: '0.2.0' } };
+      if (request.method === 'initialize') result = { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'claude-codex-relay', version: '0.2.1' } };
       else if (request.method === 'ping') result = {};
       else if (request.method === 'tools/list') result = { tools: toolDefinitions };
       else if (request.method === 'tools/call') {

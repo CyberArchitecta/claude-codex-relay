@@ -31,6 +31,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS events (
         id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id),
         kind TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS chat_checkpoints (
+        task_id TEXT PRIMARY KEY REFERENCES tasks(id), through_run_id TEXT NOT NULL REFERENCES runs(id),
+        summary TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS events_run ON events(run_id,id);
       CREATE INDEX IF NOT EXISTS runs_task ON runs(task_id,created_at);`));
     retryBusy(() => {
@@ -85,6 +88,23 @@ export class Store {
         this.db.exec('COMMIT'); return updated;
       } catch (error) { this.db.exec('ROLLBACK'); throw error; }
     });
+  }
+  checkpoint(id) { return this.db.prepare('SELECT * FROM chat_checkpoints WHERE task_id=?').get(id) || null; }
+  compactChat(id, { summary, expected_run, expected_checkpoint = null }) {
+    const value = textValue(summary, 'Summary', 20_000);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const task = this.task(id), runs = this.runs(id), latest = runs.at(-1), checkpoint = this.checkpoint(id);
+      if (task.kind !== 'chat') throw new Error('Only chats can be compacted.');
+      if (!latest || runs.some(r => activeStates.has(r.state))) throw new Error('Wait for the reply to finish before compacting.');
+      if (latest.id !== expected_run || (checkpoint?.created_at || null) !== expected_checkpoint) {
+        const error = new Error('The conversation changed. Reopen Compact chat and review your summary.'); error.status = 409; throw error;
+      }
+      this.db.prepare('INSERT INTO chat_checkpoints VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET through_run_id=excluded.through_run_id,summary=excluded.summary,created_at=excluded.created_at')
+        .run(id, latest.id, value, now());
+      this.db.prepare('UPDATE tasks SET updated_at=? WHERE id=?').run(now(), id);
+      this.db.exec('COMMIT'); return this.checkpoint(id);
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   chatDirectory(id) {
     const task = this.task(id);

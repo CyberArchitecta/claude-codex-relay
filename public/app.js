@@ -4,6 +4,16 @@ const fragment = new URLSearchParams(location.hash.slice(1));
 if (fragment.has('token')) { sessionStorage.setItem(tokenKey, fragment.get('token')); history.replaceState(null, '', location.pathname); }
 let token = sessionStorage.getItem(tokenKey), tasks = [], selected = null, detail = null, filter = 'all', connected = false, polling = false, historySignature = '';
 const contextDrafts = new Map();
+const uiKey = 'agent-relay-chat-drafts';
+let uiState; try { uiState = JSON.parse(sessionStorage.getItem(uiKey)) || { chats: {} }; } catch { uiState = { chats: {} }; }
+let composerAgent = 'claude';
+function persistUi() { try { sessionStorage.setItem(uiKey, JSON.stringify(uiState)); } catch {} }
+function rememberComposer() {
+  if (!selected || detail?.task.id !== selected) return;
+  const saved = uiState.chats[selected] ||= { models: {} };
+  saved.note = $('run-note').value; saved.agent = $('run-agent').value; saved.permission = $('run-permission').value;
+  saved.models[composerAgent] = $('run-model').value; uiState.selected = selected; persistUi();
+}
 let detailRequest = 0;
 const attentionStates = new Set(['needs_attention', 'limited', 'failed', 'interrupted']);
 const labels = { running: 'Running', queued: 'Queued', completed: 'Completed', failed: 'Failed', needs_attention: 'Needs attention', limited: 'Usage limit', interrupted: 'Interrupted', cancelled: 'Stopped', draft: 'Ready to start' };
@@ -45,7 +55,9 @@ function renderProviders(providers) {
   }
 }
 async function select(id) {
-  selected = id; detail = null; historySignature = ''; $('run-note').value = ''; renderTasks();
+  rememberComposer();
+  selected = id; uiState.selected = id; persistUi(); detail = null; historySignature = '';
+  $('run-button').disabled = $('preview').disabled = true; renderTasks();
   await refreshDetail(true);
 }
 function renderHistory(runs) {
@@ -54,8 +66,8 @@ function renderHistory(runs) {
   const history = $('run-history'), scroll = history.scrollTop, follow = history.scrollHeight - scroll - history.clientHeight < 80;
   const expanded = new Set([...$('run-history').querySelectorAll('details[open]')].map(d => d.dataset.run));
   $('run-history').replaceChildren();
-  if (!runs.length) { $('run-history').append(node('p', 'no-runs', detail?.task.kind === 'chat' ? 'Send a message below. You can switch providers between replies.' : 'Ready when you are. Choose an agent and start the first run.')); return; }
   const chat = detail?.task.kind === 'chat'; $('run-history').classList.toggle('conversation', chat);
+  if (!runs.length) { $('run-history').append(node('p', 'no-runs', detail?.task.kind === 'chat' ? 'Send a message below. You can switch providers between replies.' : 'Ready when you are. Choose an agent and start the first run.')); return; }
   const previousUsage = new Map();
   for (const run of runs) {
     if (chat) { const message = node('section', 'user-message'); message.append(node('strong', '', 'You'), node('p', '', run.instruction || detail.task.original_prompt)); $('run-history').append(message); }
@@ -93,6 +105,10 @@ function updateActions() {
     $('run-note').placeholder = 'Message Claude or Codex…';
     $('run-mode').textContent = busy ? 'Reply in progress' : latest?.agent !== agent && latest ? 'Share conversation on switch' : 'Continue conversation';
   } else $('run-note').placeholder = 'What should happen next?';
+  $('compact-chat').hidden = detail.task.kind !== 'chat';
+  $('compact-chat').disabled = busy || !detail.runs.length;
+  $('checkpoint-note').hidden = !detail.checkpoint;
+  $('checkpoint-note').textContent = detail.checkpoint ? 'Compacted: future replies use your summary. Earlier messages are kept below.' : '';
   $('run-permission').disabled = !detail.task.project;
   $('permission-note').textContent = !detail.task.project ? 'General chat. Enter sends; Shift+Enter adds a line.' : $('run-permission').value === 'read-only' ? 'Reads project files. Permission requests are surfaced for your review.' : 'Uses provider edit permissions. Denied actions appear in the run history for review.';
 }
@@ -144,9 +160,12 @@ async function refreshDetail(initial = false) {
   syncContext(id, detail.task.context);
   if (initializeControls) {
     const last = detail.runs.at(-1);
-    $('run-agent').value = last?.agent || 'claude';
-    $('run-permission').value = last?.permission || 'read-only';
-    $('run-model').value = last?.model || '';
+    const saved = uiState.chats[id];
+    composerAgent = saved?.agent || last?.agent || 'claude';
+    $('run-agent').value = composerAgent;
+    $('run-permission').value = !detail.task.project ? 'read-only' : saved?.permission || last?.permission || 'read-only';
+    $('run-model').value = saved?.models?.[composerAgent] ?? detail.runs.findLast(r => r.agent === composerAgent)?.model ?? '';
+    $('run-note').value = saved?.note || '';
   }
   $('chat-usage').textContent = (detail.usage || []).filter(u => u.reported).map(u => `${agentNames[u.agent]}: ${formatTokens(u.total)} tokens in this conversation`).join(' · ');
   renderHistory(detail.runs); updateActions();
@@ -180,7 +199,7 @@ async function createTask(start) {
     $('new-dialog').close(); $('new-form').reset();
     await select(task.id);
     $('run-agent').value = runOptions.agent; $('run-permission').value = runOptions.permission; $('run-model').value = '';
-    updateActions();
+    composerAgent = runOptions.agent; rememberComposer(); updateActions();
     if (start && (kind !== 'chat' || prompt.trim())) await api(`/tasks/${task.id}/runs`, runOptions);
     await refresh(); $('run-note').focus();
   } catch (error) { if ($('new-dialog').open) $('new-error').textContent = error.message; else { notice(`Task saved. ${error.message}`); await refresh(); } }
@@ -193,11 +212,51 @@ $('save-context').addEventListener('click', () => action(() => saveContext()));
 $('save-merged-context').addEventListener('click', () => action(() => saveContext(true)));
 $('use-latest-context').addEventListener('click', () => { const edit = contextDrafts.get(selected); if (edit) { edit.base = edit.draft = edit.latest; renderContext(); } });
 $('run-note').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && detail?.task.kind === 'chat') { event.preventDefault(); if (!$('run-button').disabled) $('continue-form').requestSubmit(); } });
-$('continue-form').addEventListener('submit', event => { event.preventDefault(); $('run-button').disabled = true; void action(async () => { await api(`/tasks/${selected}/runs`, options()); $('run-note').value = ''; await refresh(); }).finally(updateActions); });
+$('run-note').addEventListener('input', rememberComposer); $('run-model').addEventListener('input', rememberComposer);
+$('continue-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if ($('run-note').value.trim() === '/compact') { openCompact(); return; }
+  const id = selected, submitted = options(); rememberComposer(); $('run-button').disabled = true;
+  void action(async () => {
+    await api(`/tasks/${id}/runs`, submitted);
+    const saved = uiState.chats[id];
+    if (saved?.note === submitted.note) saved.note = '';
+    if (selected === id && $('run-note').value === submitted.note) $('run-note').value = '';
+    persistUi(); await refresh();
+  }).finally(updateActions);
+});
 $('preview').addEventListener('click', () => action(async () => { const result = await api(`/tasks/${selected}/preview`, options()); $('preview-mode').textContent = result.session_id ? 'Resumes the saved provider session and supplies this context.' : 'Starts a new provider session with this context.'; $('preview-text').textContent = result.prompt; $('preview-dialog').showModal(); }));
 $('stop-run').addEventListener('click', () => action(async () => { const run = detail.runs.find(r => ['queued', 'running'].includes(r.state)); if (run) await api(`/runs/${run.id}/stop`, {}); await refresh(); }));
-$('run-agent').addEventListener('change', () => { $('run-model').value = detail?.runs.findLast(r => r.agent === $('run-agent').value)?.model || ''; updateActions(); }); $('run-permission').addEventListener('change', updateActions);
+$('run-agent').addEventListener('change', () => {
+  rememberComposer(); composerAgent = $('run-agent').value;
+  $('run-model').value = uiState.chats[selected]?.models?.[composerAgent] ?? detail?.runs.findLast(r => r.agent === composerAgent)?.model ?? '';
+  rememberComposer(); updateActions();
+});
+$('run-permission').addEventListener('change', () => { rememberComposer(); updateActions(); });
 $('check-providers').addEventListener('click', () => action(async () => { renderProviders((await api('/doctor', {})).providers); }));
+
+
+let compactTarget;
+function openCompact() {
+  if (detail?.task.kind !== 'chat' || !detail.runs.length || detail.runs.some(r => ['running','queued'].includes(r.state))) { notice('Finish a chat reply before compacting.'); return; }
+  compactTarget = { id: selected, expected_run: detail.runs.at(-1).id, expected_checkpoint: detail.checkpoint?.created_at || null };
+  $('compact-summary').value = detail.checkpoint?.summary || detail.task.context;
+  $('compact-error').textContent = ''; $('confirm-compact').disabled = !$('compact-summary').value.trim();
+  $('compact-dialog').showModal(); $('compact-summary').focus();
+}
+$('compact-chat').addEventListener('click', openCompact);
+$('close-compact').addEventListener('click', () => $('compact-dialog').close());
+$('compact-summary').addEventListener('input', () => { $('confirm-compact').disabled = !$('compact-summary').value.trim(); });
+$('confirm-compact').addEventListener('click', async () => {
+  $('confirm-compact').disabled = true;
+  try {
+    await api(`/tasks/${compactTarget.id}/compact`, { ...compactTarget, summary: $('compact-summary').value });
+    $('compact-dialog').close();
+    if (selected === compactTarget.id && $('run-note').value.trim() === '/compact') { $('run-note').value = ''; rememberComposer(); }
+    await refreshDetail(); notice('Chat compacted without a model call. Your next reply starts a fresh provider session.');
+  } catch (error) { $('compact-error').textContent = error.message; }
+  finally { $('confirm-compact').disabled = !$('compact-summary').value.trim(); }
+});
 
 function formatTokens(value) { return new Intl.NumberFormat(undefined, { notation: value >= 10000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(value); }
 $('usage-button').addEventListener('click', () => action(async () => {
@@ -229,5 +288,5 @@ $('refresh-limits').addEventListener('click', () => action(async () => {
 }));
 
 if (!token) { notice('Open the private localhost URL printed by agent-relay in your terminal to connect.'); $('connection').textContent = 'Private link needed'; }
-else await action(async () => { const status = await api('/status'); connected = true; renderProviders(status.providers); $('queue-note').textContent = `${status.concurrency} run slots · One run per folder`; await refresh(); const initialTask = fragment.get('task'); if (initialTask && tasks.some(t => t.id === initialTask)) await select(initialTask); });
+else await action(async () => { const status = await api('/status'); connected = true; renderProviders(status.providers); $('queue-note').textContent = `${status.concurrency} run slots · One run per folder`; await refresh(); const initialTask = fragment.get('task') || uiState.selected; if (initialTask && tasks.some(t => t.id === initialTask)) await select(initialTask); });
 setInterval(refresh, 2000);

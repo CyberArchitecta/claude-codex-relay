@@ -35,3 +35,4 @@ jobs:
       - run: python -m pip install playwright
       - run: python -m playwright install --with-deps chromium
       - run: python scripts/test-ui.py
+      - run: python scripts/test-chat-ui.py

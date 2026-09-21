@@ -44,7 +44,7 @@ export function readCodexLimits(resolveProvider = findProvider) {
           finish(null, event.result);
         }
       });
-      send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'agent_relay', title: 'Agent Relay', version: '0.2.0' } } });
+      send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'agent_relay', title: 'Agent Relay', version: '0.2.1' } } });
     } catch (error) { finish(error); }
   });
 }

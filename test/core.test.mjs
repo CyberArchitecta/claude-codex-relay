@@ -147,3 +147,23 @@ test('projectless chat resumes each provider and forwards intervening messages',
   assert(received[1].args.includes('--tools')); assert(received[1].args.includes(''));
   assert(store.run(a.id).usage); assert(store.run(b.id).usage);
 });
+
+test('manual compaction preserves history and resets both provider sessions', async t => {
+  const { store, runner, create } = setup(t);
+  const task = create({ kind: 'chat', project: '', prompt: '', context: 'Keep the API stable.' });
+  const old = store.createRun({ task_id: task.id, agent: 'codex', prompt: 'OLD_DETAIL', instruction: 'OLD_DETAIL', permission: 'read-only' });
+  store.patchRun(old.id, { state: 'completed', session_id: 'old-session', summary: 'Old answer.' });
+  const checkpoint = store.compactChat(task.id, { summary: 'Remember the blue choice.', expected_run: old.id });
+  assert.equal(store.runs(task.id).length, 1);
+  for (const agent of ['claude', 'codex']) {
+    const next = await runner.prepare(task.id, { agent, note: 'Continue.' });
+    assert.equal(next.session_id, null); assert(next.prompt.includes('Remember the blue choice.'));
+    assert(next.prompt.includes('Keep the API stable.')); assert(!next.prompt.includes('OLD_DETAIL'));
+  }
+  assert.throws(() => store.compactChat(task.id, { summary: 'Stale summary', expected_run: old.id }), e => e.status === 409);
+  const newRun = store.createRun({ task_id: task.id, agent: 'claude', prompt: 'Next', permission: 'read-only' });
+  assert.throws(() => store.compactChat(task.id, { summary: 'Too early', expected_run: newRun.id, expected_checkpoint: checkpoint.created_at }), /finish/);
+  store.patchRun(newRun.id, { state: 'completed', session_id: 'new-session', summary: 'Fresh answer.' });
+  assert.equal((await runner.prepare(task.id, { agent: 'claude', note: 'Again.' })).session_id, 'new-session');
+  assert.throws(() => store.compactChat(task.id, { summary: 'Missed new reply', expected_run: old.id, expected_checkpoint: checkpoint.created_at }), e => e.status === 409);
+});
